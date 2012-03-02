@@ -1,0 +1,125 @@
+--- org/jivesoftware/smack/Connection.java
++++ org/jivesoftware/smack/Connection.java
+@@ -144,6 +144,12 @@ public abstract class Connection {
+             new ConcurrentHashMap<PacketListener, ListenerWrapper>();
+ 
+     /**
++     * List of PacketListeners that will be notified when a new packet couldn't be sent.
++     */
++    protected final Map<PacketListener, ListenerWrapper> sendFailureListeners =
++            new ConcurrentHashMap<PacketListener, ListenerWrapper>();
++
++    /**
+      * List of PacketInterceptors that will be notified when a new packet is about to be
+      * sent to the server. These interceptors may modify the packet before it is being
+      * actually sent to the server.
+@@ -680,6 +686,54 @@ public abstract class Connection {
+     }
+ 
+     /**
++     * Registers a packet listener with this connection. The listener will be
++     * notified of every packet that this connection could not send due to
++     * IO errors. A packet filter determines which packets will be delivered to 
++     * the listener. The listener will be called from the writer thread.
++     * 
++     * @param packetListener the packet listener to notify of failed packets.
++     * @param packetFilter   the packet filter to use.
++     */
++    public void addPacketSendFailureListener(PacketListener packetListener, PacketFilter packetFilter) {
++        if (packetListener == null) {
++            throw new NullPointerException("Packet listener is null.");
++        }
++        ListenerWrapper wrapper = new ListenerWrapper(packetListener, packetFilter);
++        sendFailureListeners.put(packetListener, wrapper);
++    }
++
++    /**
++     * Removes a packet listener for packets from this connection that couldn't be sent
++     * 
++     * @param packetListener the packet listener to remove.
++     */
++    public void removePacketSendFailureListener(PacketListener packetListener) {
++        sendFailureListeners.remove(packetListener);
++    }
++
++    /**
++     * Get a map of all packet listeners for packets of this connection that couldn't be sent
++     * 
++     * @return a map of all packet listeners for failed packets.
++     */
++    protected Map<PacketListener, ListenerWrapper> getPacketSendFailureListeners() {
++        return sendFailureListeners;
++    }
++
++
++    /**
++     * Process all packet listeners for sending packets.
++     * 
++     * @param packet the packet to process.
++     */
++    protected void firePacketSendFailureListeners(Packet packet) {
++        // Notify the listeners of the new sent packet
++        for (ListenerWrapper listenerWrapper : sendFailureListeners.values()) {
++            listenerWrapper.notifyListener(packet);
++        }
++    }
++
++    /**
+      * Registers a packet interceptor with this connection. The interceptor will be
+      * invoked every time a packet is about to be sent by this connection. Interceptors
+      * may modify the packet to be sent. A packet filter determines which packets
+--- org/jivesoftware/smack/PacketWriter.java
++++ org/jivesoftware/smack/PacketWriter.java
+@@ -192,8 +192,21 @@ class PacketWriter {
+                 Packet packet = nextPacket();
+                 if (packet != null) {
+                     synchronized (writer) {
+-                        writer.write(packet.toXML());
+-                        writer.flush();
++                    	try {
++	                        writer.write(packet.toXML());
++	                        writer.flush();
++                    	} catch (Exception e) {
++                    		e.printStackTrace();
++	                        connection.firePacketSendFailureListeners(packet);
++				            if (!done && !connection.isSocketClosed()) {
++				                done = true;
++				                // packetReader could be set to null by an concurrent disconnect() call.
++				                // Therefore Prevent NPE exceptions by checking packetReader.
++				                if (connection.packetReader != null) {
++				                	connection.packetReader.notifyConnectionError(e);
++				                }
++				            }
++                        }
+                         // Keep track of the last time a stanza was sent to the server
+                         lastActive = System.currentTimeMillis();
+                     }
+@@ -206,9 +219,19 @@ class PacketWriter {
+                 synchronized (writer) {
+                    while (!queue.isEmpty()) {
+                        Packet packet = queue.remove();
+-                        writer.write(packet.toXML());
++                       try {
++							writer.write(packet.toXML());
++		                    writer.flush();
++                       } catch (Exception e) {
++                    		e.printStackTrace();
++	                        connection.firePacketSendFailureListeners(packet);
++			                // packetReader could be set to null by an concurrent disconnect() call.
++			                // Therefore Prevent NPE exceptions by checking packetReader.
++			                if (connection.packetReader != null) {
++			                	connection.packetReader.notifyConnectionError(e);
++			                }
++                       }
+                     }
+-                    writer.flush();
+                 }
+             }
+             catch (Exception e) {
+@@ -314,4 +337,4 @@ class PacketWriter {
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
