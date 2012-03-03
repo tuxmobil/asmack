@@ -70,53 +70,71 @@
       * may modify the packet to be sent. A packet filter determines which packets
 --- org/jivesoftware/smack/PacketWriter.java
 +++ org/jivesoftware/smack/PacketWriter.java
-@@ -192,8 +192,21 @@ class PacketWriter {
-                 Packet packet = nextPacket();
+@@ -184,18 +184,32 @@ class PacketWriter {
+     }
+ 
+     private void writePackets(Thread thisThread) {
++        Packet packet = null;
+         try {
+             // Open the stream.
+             openStream();
+             // Write out packets from the queue.
+             while (!done && (writerThread == thisThread)) {
+-                Packet packet = nextPacket();
++                packet = nextPacket();
                  if (packet != null) {
-                     synchronized (writer) {
+-                    synchronized (writer) {
 -                        writer.write(packet.toXML());
 -                        writer.flush();
-+                    	try {
-+	                        writer.write(packet.toXML());
-+	                        writer.flush();
-+                    	} catch (Exception e) {
-+                    		e.printStackTrace();
-+	                        connection.firePacketSendFailureListeners(packet);
-+				            if (!done && !connection.isSocketClosed()) {
-+				                done = true;
-+				                // packetReader could be set to null by an concurrent disconnect() call.
-+				                // Therefore Prevent NPE exceptions by checking packetReader.
-+				                if (connection.packetReader != null) {
-+				                	connection.packetReader.notifyConnectionError(e);
-+				                }
-+				            }
+-                        // Keep track of the last time a stanza was sent to the server
+-                        lastActive = System.currentTimeMillis();
++                    try {
++                        synchronized (writer) {
++                            writer.write(packet.toXML());
++                            writer.flush();
++                            // Keep track of the last time a stanza was sent to the server
++                            lastActive = System.currentTimeMillis();
 +                        }
-                         // Keep track of the last time a stanza was sent to the server
-                         lastActive = System.currentTimeMillis();
++                    } catch (Exception e) {
++                        e.printStackTrace();
++                        connection.firePacketSendFailureListeners(packet);
++                        if (!done && !connection.isSocketClosed()) {
++                            done = true;
++                            // packetReader could be set to null by an concurrent disconnect() call.
++                            // Therefore Prevent NPE exceptions by checking packetReader.
++                            if (connection.packetReader != null) {
++                                connection.packetReader.notifyConnectionError(e);
++                            }
++                        }
                      }
-@@ -206,9 +219,19 @@ class PacketWriter {
+                 }
+             }
+@@ -204,15 +218,22 @@ class PacketWriter {
+             // by the shutdown process.
+             try {
                  synchronized (writer) {
++                   packet = null;
                     while (!queue.isEmpty()) {
-                        Packet packet = queue.remove();
--                        writer.write(packet.toXML());
-+                       try {
-+							writer.write(packet.toXML());
-+		                    writer.flush();
-+                       } catch (Exception e) {
-+                    		e.printStackTrace();
-+	                        connection.firePacketSendFailureListeners(packet);
-+			                // packetReader could be set to null by an concurrent disconnect() call.
-+			                // Therefore Prevent NPE exceptions by checking packetReader.
-+			                if (connection.packetReader != null) {
-+			                	connection.packetReader.notifyConnectionError(e);
-+			                }
-+                       }
+-                       Packet packet = queue.remove();
++                       packet = queue.remove();
+                         writer.write(packet.toXML());
++                        writer.flush();
                      }
 -                    writer.flush();
                  }
              }
              catch (Exception e) {
-@@ -314,4 +337,4 @@ class PacketWriter {
+                 e.printStackTrace();
++                if (packet != null) connection.firePacketSendFailureListeners(packet);
++                // packetReader could be set to null by an concurrent disconnect() call.
++                // Therefore Prevent NPE exceptions by checking packetReader.
++                if (connection.packetReader != null) {
++                    connection.packetReader.notifyConnectionError(e);
++                }
+             }
+ 
+             // Delete the queue contents (hopefully nothing is left).
+@@ -314,4 +335,4 @@ class PacketWriter {
              }
          }
      }
